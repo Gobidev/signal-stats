@@ -35,6 +35,16 @@ with open(CHAT_FILE) as f:
 
 contacts[MY_AUTHOR_ID] = "You"
 
+# --- Fun fact tracking ---
+longest_msg = {"length": 0, "text": "", "author": "", "chat": "", "date": ""}
+busiest_day = {"date": "", "count": 0}
+hourly_counts = Counter()
+weekday_counts = Counter()
+msg_dates = defaultdict(set)  # chat_id -> set of date strings
+msg_timestamps = []  # (timestamp_ms, author, chat_id)
+msg_lengths = []  # (length, author, chat_id, date, text)
+day_counts = Counter()
+
 
 def name_for(aid):
     return contacts.get(aid, f"User {aid}")
@@ -80,6 +90,7 @@ with open(CHAT_FILE) as f:
                 "len_buckets": Counter(),
                 "monthly": Counter(),
                 "monthly_chars": Counter(),
+                "top_msgs": [],
             }
 
         chat = chats[cid]
@@ -139,6 +150,22 @@ with open(CHAT_FILE) as f:
             else:
                 chat["len_buckets"]["500+"] += 1
 
+            msg_lengths.append((blen, aid, cid, month_key, body[:200]))
+            if blen > longest_msg["length"]:
+                longest_msg.update({"length": blen, "text": body[:200], "author": aid, "chat": cid, "date": month_key})
+            chat["top_msgs"].append((blen, aid, body, ts.strftime("%Y-%m-%d")))
+            if len(chat["top_msgs"]) > 10:
+                chat["top_msgs"].sort(key=lambda x: x[0], reverse=True)
+                chat["top_msgs"] = chat["top_msgs"][:10]
+
+        day_str = ts.strftime("%Y-%m-%d")
+        msg_dates[cid].add(day_str)
+        hourly_counts[ts.hour] += 1
+        weekday_counts[ts.strftime("%A")] += 1
+        msg_timestamps.append((int(item["dateSent"]), aid, cid))
+
+        day_counts[day_str] += 1
+
 # --- Aggregate ---
 one_on_one = {cid: ch for cid, ch in chats.items() if len(ch["authors"]) == 2 and MY_AUTHOR_ID in ch["authors"]}
 groups = {cid: ch for cid, ch in chats.items() if len(ch["authors"]) > 2 and MY_AUTHOR_ID in ch["authors"]}
@@ -159,6 +186,75 @@ total_msgs = sum(ch["total"] for ch in chats.values())
 total_text_len = sum(ch["text_len_total"] for ch in chats.values())
 total_1on1 = sum(ch["total"] for ch in one_on_one.values())
 total_group = sum(ch["total"] for ch in groups.values())
+
+# --- Fun fact aggregation ---
+busiest_day_str = day_counts.most_common(1)[0] if day_counts else ("", 0)
+busiest_day = {"date": busiest_day_str[0], "count": busiest_day_str[1]}
+
+peak_hour = hourly_counts.most_common(1)[0] if hourly_counts else (0, 0)
+peak_weekday = weekday_counts.most_common(1)[0] if weekday_counts else ("", 0)
+
+# Most prolific texter by message count
+author_msg_counts = Counter()
+author_char_counts = Counter()
+for ch in chats.values():
+    for aid, cnt in ch["author_counter"].items():
+        author_msg_counts[aid] += cnt
+    for aid in ch["authors"]:
+        # approximate char count per author isn't tracked, skip for now
+        pass
+most_prolific_msg = author_msg_counts.most_common(1)[0] if author_msg_counts else ("", 0)
+
+# Per-chat streaks for 1-on-1 chats
+chat_streaks = {}
+for cid, ch in one_on_one.items():
+    days = sorted(msg_dates.get(cid, []))
+    longest = 0
+    cur = 0
+    s_start = ""
+    best_start = ""
+    best_end = ""
+    if days:
+        prev = datetime.strptime(days[0], "%Y-%m-%d")
+        s_start = days[0]
+        cur = 1
+        longest = 1
+        best_start = days[0]
+        best_end = days[0]
+        for d_str in days[1:]:
+            d = datetime.strptime(d_str, "%Y-%m-%d")
+            if (d - prev).days == 1:
+                cur += 1
+            else:
+                if cur > longest:
+                    longest = cur
+                    best_start = s_start
+                    best_end = prev.strftime("%Y-%m-%d")
+                cur = 1
+                s_start = d_str
+            prev = d
+        if cur > longest:
+            longest = cur
+            best_start = s_start
+            best_end = days[-1]
+    chat_streaks[cid] = {"days": longest, "start": best_start, "end": best_end}
+
+# Longest gap between messages (global)
+longest_gap_days = 0
+gap_start = ""
+gap_end = ""
+if msg_timestamps:
+    sorted_ts = sorted(set(t[0] for t in msg_timestamps))
+    for i in range(1, len(sorted_ts)):
+        diff = (sorted_ts[i] - sorted_ts[i-1]) / 86400000  # ms to days
+        if diff > longest_gap_days:
+            longest_gap_days = diff
+            gap_start = datetime.fromtimestamp(sorted_ts[i-1]/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            gap_end = datetime.fromtimestamp(sorted_ts[i]/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+# Average messages per active day
+all_days = sorted(day_counts.keys())
+avg_msgs_per_day = total_msgs / len(all_days) if all_days else 0
 
 # --- Build plotly charts ---
 all_months = sorted(monthly_all.keys())
@@ -300,11 +396,13 @@ tr:hover td { background: #1f1f23; }
 .name-cell { font-weight: 500; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .bar-cell { min-width: 100px; }
+.msg-cell { white-space: normal !important; line-height: 1.4; font-size: 13px; color: #a1a1aa; cursor: pointer; max-width: 500px; word-break: break-word; }
+.msg-cell:hover { color: #d4d4d8; }
 .bar { height: 8px; background: #27272a; border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
 
 .vbars { display: flex; align-items: end; gap: 2px; height: 80px; padding: 4px 0; }
-.vbar { flex: 1; min-width: 3px; border-radius: 2px 2px 0 0; position: relative; cursor: pointer; }
+.vbar { flex: 1; min-width: 3px; border-radius: 2px 2px 0 0; position: relative; cursor: pointer; height: 100%; }
 .vbar-fill { background: #4f8cf7; border-radius: 2px 2px 0 0; min-height: 1px; }
 .vbar .tooltip { display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #27272a; color: #e4e4e7; padding: 3px 6px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; pointer-events: none; }
 .vbar:hover .tooltip { display: block; }
@@ -333,6 +431,17 @@ tr:hover td { background: #1f1f23; }
 
 .len-bucket { display: inline-flex; align-items: center; gap: 6px; margin: 2px 4px 2px 0; }
 .len-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+.fun-fact { display: flex; align-items: center; gap: 16px; padding: 16px 20px; }
+.fun-fact-icon { font-size: 32px; flex-shrink: 0; width: 48px; text-align: center; }
+.fun-fact-body { flex: 1; min-width: 0; }
+.fun-fact-label { font-size: 13px; color: #a1a1aa; margin-bottom: 2px; }
+.fun-fact-value { font-size: 20px; font-weight: 700; }
+.fun-fact-detail { font-size: 13px; color: #71717a; margin-top: 4px; line-height: 1.4; }
+.fun-fact-detail em { color: #a1a1aa; font-style: normal; }
+.msg-preview { background: #27272a; border-radius: 8px; padding: 10px 14px; margin-top: 8px; font-size: 13px; color: #d4d4d8; line-height: 1.5; word-break: break-word; max-height: 80px; overflow: hidden; }
+.msg-preview-trunc { position: relative; }
+.msg-preview-trunc::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 24px; background: linear-gradient(transparent, #27272a); }
 
 .plot-container { border-radius: 8px; overflow: hidden; }
 .js-plotly-plot .plotly .main-svg { border-radius: 8px; }
@@ -371,6 +480,8 @@ w("""
   <button class="tab" onclick="switchTab('groups')">Group Chats</button>
   <button class="tab" onclick="switchTab('activity')">Activity</button>
   <button class="tab" onclick="switchTab('types')">Message Types</button>
+  <button class="tab" onclick="switchTab('funfacts')">Fun Facts</button>
+  <button class="tab" onclick="switchTab('insights')">1-on-1 Insights</button>
   <button class="tab" onclick="switchTab('detail')">Full Details</button>
 </div>
 """)
@@ -607,6 +718,189 @@ for t, c in type_counts.most_common():
     w(f"<tr><td>{label}</td><td class='num'>{c}</td><td class='num'>{pct:.1f}%</td><td class='bar-cell'>{bar(c, max_type, '#22c55e')}</td></tr>")
 w("</tbody></table></div></div>")
 
+# === FUN FACTS TAB ===
+w('<div id="tab-funfacts" class="tab-content">')
+w('<h2>Fun Facts</h2>')
+
+# Longest message
+lm_author = name_for(longest_msg["author"]) if longest_msg["author"] else "?"
+lm_chat = longest_msg["chat"]
+lm_chat_name = chats[lm_chat]["authors"] if lm_chat in chats else set()
+lm_chat_label = chat_label(lm_chat, lm_chat_name) if lm_chat else ""
+lm_preview = html.escape(longest_msg["text"][:150])
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">📜</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Longest Message Ever</div>
+    <div class="fun-fact-value">{longest_msg['length']:,} characters</div>
+    <div class="fun-fact-detail">Sent by <em>{H(lm_author)}</em> in <em>{H(lm_chat_label)}</em> &middot; {longest_msg['date']}</div>
+    <div class="msg-preview msg-preview-trunc">{lm_preview}{'&hellip;' if len(longest_msg['text']) > 150 else ''}</div>
+  </div>
+</div>""")
+
+# Busiest day
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">🔥</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Busiest Day Ever</div>
+    <div class="fun-fact-value">{busiest_day['count']:,} messages</div>
+    <div class="fun-fact-detail">{busiest_day['date']}</div>
+  </div>
+</div>""")
+
+# Peak hour
+hour_12 = peak_hour[0] % 12 or 12
+am_pm = "AM" if peak_hour[0] < 12 else "PM"
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">⏰</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Peak Chatting Hour</div>
+    <div class="fun-fact-value">{hour_12}:00 {am_pm}</div>
+    <div class="fun-fact-detail">{peak_hour[1]:,} messages sent during this hour</div>
+  </div>
+</div>""")
+
+# Most active weekday
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">📅</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Most Active Day of the Week</div>
+    <div class="fun-fact-value">{peak_weekday[0]}</div>
+    <div class="fun-fact-detail">{peak_weekday[1]:,} messages</div>
+  </div>
+</div>""")
+
+# Most prolific texter
+mp_author = name_for(most_prolific_msg[0]) if most_prolific_msg[0] else "?"
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">🏆</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Most Prolific Texter</div>
+    <div class="fun-fact-value">{H(mp_author)}</div>
+    <div class="fun-fact-detail">{most_prolific_msg[1]:,} messages total</div>
+  </div>
+</div>""")
+
+# Longest silence
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">🤫</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Longest Silence</div>
+    <div class="fun-fact-value">{longest_gap_days:.0f} days</div>
+    <div class="fun-fact-detail">{gap_start} &rarr; {gap_end}</div>
+  </div>
+</div>""")
+
+# Average messages per day
+w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">📊</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Daily Average</div>
+    <div class="fun-fact-value">{avg_msgs_per_day:.1f} messages/day</div>
+    <div class="fun-fact-detail">Across {len(all_days):,} active days</div>
+  </div>
+</div>""")
+
+# Hourly activity chart
+w('<h2>Activity by Hour of Day</h2>')
+w('<div class="card">')
+hour_labels = [f"{h % 12 or 12}{'a' if h < 12 else 'p'}" for h in range(24)]
+hour_vals = [hourly_counts.get(h, 0) for h in range(24)]
+max_hour_val = max(hour_vals) if hour_vals else 1
+hour_bars = ""
+for i, v in enumerate(hour_vals):
+    pct = v / max_hour_val * 100
+    hour_bars += f'<div class="vbar" title="{i}:00 — {v:,} msgs"><div class="vbar-fill" style="height:{pct:.1f}%"></div><span class="tooltip">{hour_labels[i]}: {v:,}</span></div>'
+w(f'<div class="vbars" style="height:120px">{hour_bars}</div>')
+w('<div style="display:flex;justify-content:space-between;font-size:10px;color:#71717a;margin-top:4px"><span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>12a</span></div>')
+w('</div>')
+
+# Weekday activity chart
+w('<h2>Activity by Day of Week</h2>')
+w('<div class="card">')
+day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+day_vals = [weekday_counts.get(d, 0) for d in day_order]
+max_day_val = max(day_vals) if day_vals else 1
+day_bars = ""
+for i, (d, v) in enumerate(zip(day_order, day_vals)):
+    pct = v / max_day_val * 100
+    day_bars += f'<div class="vbar" title="{d}: {v:,} msgs"><div class="vbar-fill" style="height:{pct:.1f}%"></div><span class="tooltip">{d[:3]}: {v:,}</span></div>'
+w(f'<div class="vbars" style="height:100px">{day_bars}</div>')
+w('<div style="display:flex;justify-content:space-between;font-size:10px;color:#71717a;margin-top:4px"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>')
+w('</div>')
+
+w('</div>')  # end fun facts tab
+
+# === 1-ON-1 INSIGHTS TAB ===
+w('<div id="tab-insights" class="tab-content">')
+w('<h2>1-on-1 Insights</h2>')
+
+for cid, ch in sorted_1on1:
+    partner = (ch["authors"] - {MY_AUTHOR_ID}).pop()
+    pname = name_for(partner)
+    streak = chat_streaks.get(cid, {"days": 0, "start": "", "end": ""})
+    top = ch.get("top_msgs", [])
+
+    w(f'<div class="card" style="margin-bottom:24px">')
+    w(f'<h3 style="margin-bottom:12px">{H(pname)}</h3>')
+
+    # Streak
+    if streak["days"] > 0:
+        w(f"""<div class="fun-fact" style="padding:10px 0">
+  <div class="fun-fact-icon" style="font-size:24px;width:32px">🔥</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Longest Streak</div>
+    <div class="fun-fact-value" style="font-size:18px">{streak['days']} days</div>
+    <div class="fun-fact-detail">{streak['start']} &rarr; {streak['end']}</div>
+  </div>
+</div>""")
+    else:
+        w("""<div class="fun-fact" style="padding:10px 0">
+  <div class="fun-fact-icon" style="font-size:24px;width:32px">🔥</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Longest Streak</div>
+    <div class="fun-fact-value" style="font-size:18px">No consecutive days</div>
+  </div>
+</div>""")
+
+    # Top longest messages
+    if top:
+        w('<div style="margin-top:8px"><div class="fun-fact-label" style="margin-bottom:8px">Top 10 Longest Messages</div>')
+        w("""<table><thead><tr>
+  <th class="num">#</th>
+  <th class="num">Chars</th>
+  <th>Sender</th>
+  <th class="hide-mobile">Date</th>
+  <th>Message</th>
+</tr></thead><tbody>""")
+        for i, (length, author, text, date) in enumerate(top, 1):
+            sender = name_for(author)
+            full_text = html.escape(text)
+            if len(text) > 120:
+                truncated = html.escape(text[:120]) + "&hellip;"
+                w(f"""<tr>
+  <td class="num">{i}</td>
+  <td class="num">{length:,}</td>
+  <td class="name-cell">{H(sender)}</td>
+  <td class="hide-mobile">{date}</td>
+  <td class="msg-cell" onclick="this.querySelector('.msg-full').style.display=this.querySelector('.msg-full').style.display==='block'?'none':'block';this.querySelector('.msg-trunc').style.display=this.querySelector('.msg-full').style.display==='block'?'none':'block'"><span class="msg-trunc">{truncated}</span><span class="msg-full" style="display:none">{full_text}</span></td>
+</tr>""")
+            else:
+                w(f"""<tr>
+  <td class="num">{i}</td>
+  <td class="num">{length:,}</td>
+  <td class="name-cell">{H(sender)}</td>
+  <td class="hide-mobile">{date}</td>
+  <td class="msg-cell">{full_text}</td>
+</tr>""")
+        w("</tbody></table></div>")
+    else:
+        w('<p style="color:#71717a;font-size:13px;margin-top:8px">No text messages in this chat.</p>')
+
+    w('</div>')  # end chat card
+
+w('</div>')  # end insights tab
+
 # === FULL DETAILS TAB ===
 w('<div id="tab-detail" class="tab-content">')
 w('<h2>1-on-1 Chat Details</h2>')
@@ -648,7 +942,7 @@ for cid, ch in sorted_1on1:
 </div>
 <div style="margin:12px 0">
   <div style="font-size:12px;color:#a1a1aa;margin-bottom:4px">Monthly Activity</div>
-  <div class="vbars">{spark}</div>
+  <div class="vbars" style="height:80px">{spark}</div>
 </div>
 """)
     if len_bars:
@@ -694,7 +988,7 @@ if groups:
 </div>
 <div style="margin:12px 0">
   <div style="font-size:12px;color:#a1a1aa;margin-bottom:4px">Monthly Activity</div>
-  <div class="vbars">{spark}</div>
+  <div class="vbars" style="height:80px">{spark}</div>
 </div>
 <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">
 """)
