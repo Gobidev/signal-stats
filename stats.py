@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict, Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import html
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -209,35 +209,67 @@ most_prolific_msg = author_msg_counts.most_common(1)[0] if author_msg_counts els
 chat_streaks = {}
 for cid, ch in one_on_one.items():
     days = sorted(msg_dates.get(cid, []))
-    longest = 0
-    cur = 0
-    s_start = ""
-    best_start = ""
-    best_end = ""
+    all_streaks = []
+    all_gaps = []
+    cur_start = ""
+    cur_len = 0
     if days:
         prev = datetime.strptime(days[0], "%Y-%m-%d")
-        s_start = days[0]
-        cur = 1
-        longest = 1
-        best_start = days[0]
-        best_end = days[0]
+        cur_start = days[0]
+        cur_len = 1
         for d_str in days[1:]:
             d = datetime.strptime(d_str, "%Y-%m-%d")
             if (d - prev).days == 1:
-                cur += 1
+                cur_len += 1
             else:
-                if cur > longest:
-                    longest = cur
-                    best_start = s_start
-                    best_end = prev.strftime("%Y-%m-%d")
-                cur = 1
-                s_start = d_str
+                all_streaks.append({"days": cur_len, "start": cur_start, "end": prev.strftime("%Y-%m-%d")})
+                gap_days = (d - prev).days - 1
+                all_gaps.append({"days": gap_days, "start": prev.strftime("%Y-%m-%d"), "end": d_str})
+                cur_start = d_str
+                cur_len = 1
             prev = d
-        if cur > longest:
-            longest = cur
-            best_start = s_start
-            best_end = days[-1]
-    chat_streaks[cid] = {"days": longest, "start": best_start, "end": best_end}
+        all_streaks.append({"days": cur_len, "start": cur_start, "end": days[-1]})
+    all_streaks.sort(key=lambda x: x["days"], reverse=True)
+    all_gaps.sort(key=lambda x: x["days"], reverse=True)
+
+    avg_len = sum(s["days"] for s in all_streaks) / len(all_streaks) if all_streaks else 0
+    chat_streaks[cid] = {
+        "all": all_streaks,
+        "longest": all_streaks[0] if all_streaks else {"days": 0, "start": "", "end": ""},
+        "top_streaks": all_streaks[:5],
+        "longest_gap": all_gaps[0] if all_gaps else {"days": 0, "start": "", "end": ""},
+        "total": len(all_streaks),
+        "avg": avg_len,
+    }
+
+# Global longest streak (any chat, any sender)
+all_global_days = sorted(day_counts.keys())
+global_longest_streak = 0
+global_streak_start = ""
+global_streak_end = ""
+if all_global_days:
+    prev = datetime.strptime(all_global_days[0], "%Y-%m-%d")
+    cur_start = all_global_days[0]
+    cur_len = 1
+    global_longest_streak = 1
+    global_streak_start = all_global_days[0]
+    global_streak_end = all_global_days[0]
+    for d_str in all_global_days[1:]:
+        d = datetime.strptime(d_str, "%Y-%m-%d")
+        if (d - prev).days == 1:
+            cur_len += 1
+        else:
+            if cur_len > global_longest_streak:
+                global_longest_streak = cur_len
+                global_streak_start = cur_start
+                global_streak_end = prev.strftime("%Y-%m-%d")
+            cur_start = d_str
+            cur_len = 1
+        prev = d
+    if cur_len > global_longest_streak:
+        global_longest_streak = cur_len
+        global_streak_start = cur_start
+        global_streak_end = all_global_days[-1]
 
 # Longest gap between messages (global)
 longest_gap_days = 0
@@ -398,6 +430,27 @@ tr:hover td { background: #1f1f23; }
 .bar-cell { min-width: 100px; }
 .msg-cell { white-space: normal !important; line-height: 1.4; font-size: 13px; color: #a1a1aa; cursor: pointer; max-width: 500px; word-break: break-word; }
 .msg-cell:hover { color: #d4d4d8; }
+
+.cal-wrap { overflow-x: auto; margin-bottom: 8px; }
+.cal-container { display: inline-flex; gap: 6px; align-items: start; }
+.cal-dow { display: flex; flex-direction: column; gap: 2px; padding-top: 16px; }
+.cal-dow span { width: 10px; height: 10px; font-size: 8px; color: #52525b; display: flex; align-items: center; justify-content: center; }
+.cal-months { display: flex; gap: 0; height: 14px; font-size: 9px; color: #52525b; margin-bottom: 2px; }
+.cal-months span { flex-shrink: 0; }
+.cal-grid-gh { display: flex; gap: 2px; }
+.cal-week { display: flex; flex-direction: column; gap: 2px; }
+.cal-cell-gh { width: 10px; height: 10px; border-radius: 2px; background: #18181b; }
+.cal-cell-gh.on { background: #2563eb; }
+.cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 10px; color: #71717a; }
+.cal-legend-cell { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.cal-years { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+.cal-year-btn { padding: 3px 10px; border-radius: 4px; background: #27272a; color: #a1a1aa; cursor: pointer; font-size: 12px; border: none; }
+.cal-year-btn:hover { background: #3f3f46; color: #e4e4e7; }
+.cal-year-btn.active { background: #4f8cf7; color: #fff; }
+.cal-stat { }
+.cal-stat-label { font-size: 11px; color: #71717a; }
+.cal-stat-value { font-size: 18px; font-weight: 700; }
+.cal-stat-detail { font-size: 11px; color: #52525b; }
 .bar { height: 8px; background: #27272a; border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
 
@@ -500,7 +553,7 @@ for cid, ch in sorted_1on1:
     out_pct = ch["outgoing"] / max_1on1_total * 100
     w(f"""<div class="comp-row">
   <div class="comp-label" title="{H(pname)}">{H(pname)}</div>
-  <div class="comp-bar-wrap"><div class="comp-bar-in" style="width:{in_pct:.1f}%"></div><div class="comp-bar-out" style="width:{out_pct:.1f}%"></div></div>
+  <div class="comp-bar-wrap"><div class="comp-bar-in" style="width:{in_pct:.1f}%" title="Them: {ch['incoming']:,}"></div><div class="comp-bar-out" style="width:{out_pct:.1f}%" title="You: {ch['outgoing']:,}"></div></div>
   <div class="comp-num">{ch['total']}</div>
 </div>""")
 w('</div>')
@@ -553,7 +606,7 @@ if sorted_groups:
         out_pct = ch["outgoing"] / max_g * 100
         w(f"""<div class="comp-row">
   <div class="comp-label" title="{H(cname)}">{H(cname)}</div>
-  <div class="comp-bar-wrap"><div class="comp-bar-in" style="width:{in_pct:.1f}%"></div><div class="comp-bar-out" style="width:{out_pct:.1f}%"></div></div>
+  <div class="comp-bar-wrap"><div class="comp-bar-in" style="width:{in_pct:.1f}%" title="Incoming: {ch['incoming']:,}"></div><div class="comp-bar-out" style="width:{out_pct:.1f}%" title="Outgoing: {ch['outgoing']:,}"></div></div>
   <div class="comp-num">{total}</div>
 </div>""")
     w('</div></div>')
@@ -781,6 +834,17 @@ w(f"""<div class="card fun-fact">
   </div>
 </div>""")
 
+# Longest streak overall
+if global_longest_streak > 0:
+    w(f"""<div class="card fun-fact">
+  <div class="fun-fact-icon">🔥</div>
+  <div class="fun-fact-body">
+    <div class="fun-fact-label">Longest Streak (Any Chat)</div>
+    <div class="fun-fact-value">{global_longest_streak} days</div>
+    <div class="fun-fact-detail">{global_streak_start} &rarr; {global_streak_end}</div>
+  </div>
+</div>""")
+
 # Longest silence
 w(f"""<div class="card fun-fact">
   <div class="fun-fact-icon">🤫</div>
@@ -838,30 +902,120 @@ w('<h2>1-on-1 Insights</h2>')
 for cid, ch in sorted_1on1:
     partner = (ch["authors"] - {MY_AUTHOR_ID}).pop()
     pname = name_for(partner)
-    streak = chat_streaks.get(cid, {"days": 0, "start": "", "end": ""})
+    streak_info = chat_streaks.get(cid, {"all": [], "longest": {"days": 0, "start": "", "end": ""}, "top_streaks": [], "longest_gap": {"days": 0, "start": "", "end": ""}, "total": 0, "avg": 0})
     top = ch.get("top_msgs", [])
+    active_days = sorted(msg_dates.get(cid, []))
 
     w(f'<div class="card" style="margin-bottom:24px">')
     w(f'<h3 style="margin-bottom:12px">{H(pname)}</h3>')
 
-    # Streak
-    if streak["days"] > 0:
-        w(f"""<div class="fun-fact" style="padding:10px 0">
-  <div class="fun-fact-icon" style="font-size:24px;width:32px">🔥</div>
-  <div class="fun-fact-body">
-    <div class="fun-fact-label">Longest Streak</div>
-    <div class="fun-fact-value" style="font-size:18px">{streak['days']} days</div>
-    <div class="fun-fact-detail">{streak['start']} &rarr; {streak['end']}</div>
-  </div>
-</div>""")
+    # Calendar heatmap
+    if active_days:
+        msgs_by_day = set(active_days)
+        years = sorted(set(d[:4] for d in active_days))
+        cal_id = cid.replace("-", "")[:12]
+
+        # Year selector buttons
+        w(f'<div class="cal-years" id="cal-years-{cal_id}">')
+        for i, yr in enumerate(years):
+            active_cls = " active" if i == len(years) - 1 else ""
+            w(f'<button class="cal-year-btn{active_cls}" onclick="showCalYear(\'{cal_id}\',\'{yr}\',this)">{yr}</button>')
+        w('</div>')
+
+        # Render a grid for each year
+        for yr in years:
+            hidden = ' style="display:none"' if yr != years[-1] else ''
+            w(f'<div class="cal-wrap" id="cal-{cal_id}-{yr}"{hidden}>')
+            # Month labels
+            w('<div class="cal-container">')
+            jan1 = datetime(int(yr), 1, 1, tzinfo=timezone.utc)
+            start = jan1 - timedelta(days=jan1.weekday())
+            # Calculate month label positions
+            month_names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+            month_positions = []
+            for m in range(12):
+                m_start = datetime(int(yr), m+1, 1, tzinfo=timezone.utc)
+                offset = (m_start - start).days
+                week_col = offset // 7
+                month_positions.append((week_col, month_names[m]))
+            # Day-of-week labels
+            w('<div class="cal-dow"><span></span><span>M</span><span></span><span>W</span><span></span><span>F</span><span></span></div>')
+            w('<div>')
+            # Month labels row
+            w('<div class="cal-months">')
+            prev_pos = 0
+            for pos, name in month_positions:
+                gap = pos - prev_pos
+                if gap > 0:
+                    w(f'<span style="width:{gap * 12}px"></span>')
+                w(f'<span>{name}</span>')
+                prev_pos = pos + len(name) // 2
+            w('</div>')
+            # Grid
+            w('<div class="cal-grid-gh">')
+            for week in range(53):
+                w('<div class="cal-week">')
+                for dow in range(7):
+                    day = start + timedelta(weeks=week, days=dow)
+                    if day.year != int(yr):
+                        w('<div class="cal-cell-gh" style="visibility:hidden"></div>')
+                    else:
+                        ds = day.strftime("%Y-%m-%d")
+                        cls = "cal-cell-gh on" if ds in msgs_by_day else "cal-cell-gh"
+                        w(f'<div class="{cls}" title="{ds}"></div>')
+                w('</div>')
+            w('</div>')
+            w('</div>')
+            w('</div>')
+            w('</div>')
+        # Legend
+        w('<div class="cal-legend"><span>No msgs</span><div class="cal-legend-cell cal-cell-gh"></div><div class="cal-legend-cell cal-cell-gh on"></div><span>Messages sent</span></div>')
     else:
-        w("""<div class="fun-fact" style="padding:10px 0">
-  <div class="fun-fact-icon" style="font-size:24px;width:32px">🔥</div>
-  <div class="fun-fact-body">
-    <div class="fun-fact-label">Longest Streak</div>
-    <div class="fun-fact-value" style="font-size:18px">No consecutive days</div>
-  </div>
+        w('<p style="color:#71717a;font-size:13px;margin-bottom:8px">No active days recorded.</p>')
+
+    # Stats row
+    w('<div style="display:flex;gap:32px;margin:16px 0;flex-wrap:wrap;align-items:start">')
+
+    # Streak tower (top 5 with 3D effect)
+    top_streaks = streak_info["top_streaks"]
+    if top_streaks:
+        w('<div>')
+        w('<div class="cal-stat-label" style="margin-bottom:8px">Top Streaks</div>')
+        w('<div style="display:flex;align-items:end;gap:6px">')
+        for i, s in enumerate(top_streaks):
+            scale = 1 - i * 0.12
+            opacity = 1 - i * 0.15
+            font_size = int(22 * scale)
+            bar_h = max(int(48 * scale), 16)
+            w(f"""<div style="text-align:center;opacity:{opacity};cursor:default" title="{s['days']} days: {s['start']} → {s['end']}">
+  <div style="font-size:{font_size}px;font-weight:700;line-height:1">{s['days']}</div>
+  <div style="font-size:9px;color:#71717a;margin-top:2px">days</div>
+  <div style="width:28px;height:{bar_h}px;background:linear-gradient(to top,#1e3a5f,#2563eb);border-radius:4px 4px 0 0;margin:4px auto 0"></div>
+  <div style="font-size:8px;color:#52525b;margin-top:2px;max-width:60px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{s['start'][-5:]}</div>
 </div>""")
+        w('</div>')
+        w('</div>')
+
+    # Longest silence
+    gap = streak_info["longest_gap"]
+    if gap["days"] > 0:
+        w(f"""<div class="cal-stat">
+  <div class="cal-stat-label">Longest Silence</div>
+  <div class="cal-stat-value">{gap['days']} <span class="cal-stat-detail">days</span></div>
+  <div class="cal-stat-detail">{gap['start']} &rarr; {gap['end']}</div>
+</div>""")
+
+    # Total streaks + avg
+    w(f"""<div class="cal-stat">
+  <div class="cal-stat-label">Total Streaks</div>
+  <div class="cal-stat-value">{streak_info['total']}</div>
+</div>""")
+    w(f"""<div class="cal-stat">
+  <div class="cal-stat-label">Avg Length</div>
+  <div class="cal-stat-value">{streak_info['avg']:.1f} <span class="cal-stat-detail">days</span></div>
+</div>""")
+
+    w('</div>')
 
     # Top longest messages
     if top:
@@ -1009,6 +1163,15 @@ function switchTab(name) {
   setTimeout(() => {
     document.querySelectorAll('#tab-' + name + ' .js-plotly-plot').forEach(el => Plotly.Plots.resize(el));
   }, 50);
+}
+function showCalYear(id, year, btn) {
+  const parent = btn.parentElement;
+  parent.querySelectorAll('.cal-year-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  // Hide all grids for this calendar, show the selected year
+  const prefix = 'cal-' + id + '-';
+  document.querySelectorAll('[id^="' + prefix + '"]').forEach(el => el.style.display = 'none');
+  document.getElementById(prefix + year).style.display = '';
 }
 </script>
 </body>
